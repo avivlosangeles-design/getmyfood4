@@ -1,1 +1,167 @@
-index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GET My .FOOD</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://atlas.microsoft.com/sdk/javascript/mapcontrol/2/atlas.min.css" />
+  <style>
+    body { font-family: 'Poppins', sans-serif; }
+    .title-text { font-size: 1.7rem; font-weight: 700; color: #ff0000; }
+    .food-banner {
+      background-image: url('https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=1600&q=80');
+      background-size: cover; background-position: center; height: 300px;
+    }
+    .loader { border-top-color: #3498db; animation: spinner 1.5s linear infinite; }
+    @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    #map { height: 300px; width: 100%; margin-top: 20px; }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div class="container mx-auto px-4 py-8">
+    <div class="food-banner rounded-lg mb-8 flex items-center justify-center">
+      <h1 class="title-text bg-white bg-opacity-80 px-6 py-4 rounded-lg">
+        What kind of food would you like to eat today?
+      </h1>
+    </div>
+
+    <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+      <h2 class="text-xl font-bold mb-4 text-primary">Find Your Perfect Meal</h2>
+      <form id="searchForm" class="space-y-4">
+        <div>
+          <label for="foodType" class="block text-sm font-medium text-gray-700">Food Type</label>
+          <input type="text" id="foodType" placeholder="e.g. vegetarian, pizza" 
+                 class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary p-2 border">
+        </div>
+        <div>
+          <label for="location" class="block text-sm font-medium text-gray-700">Location</label>
+          <input type="text" id="location" placeholder="Zip code or city" 
+                 class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary focus:ring-primary p-2 border">
+        </div>
+        <button type="submit" class="w-full bg-primary text-white py-2 px-4 rounded-md hover:bg-red-700 transition flex justify-center">
+          <span id="searchText">Search</span>
+          <div id="searchSpinner" class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-5 w-5 ml-2 hidden"></div>
+        </button>
+      </form>
+    </div>
+
+    <div id="map" class="hidden"></div>
+    <div id="results" class="space-y-6"></div>
+
+    <div id="pagination" class="flex justify-center mt-8 hidden">
+      <button id="prevBtn" class="px-4 py-2 bg-secondary text-white rounded-l-md hover:bg-blue-700 disabled:bg-gray-300">Previous</button>
+      <span id="pageInfo" class="px-4 py-2 bg-gray-100">Page 1 of 1</span>
+      <button id="nextBtn" class="px-4 py-2 bg-secondary text-white rounded-r-md hover:bg-blue-700 disabled:bg-gray-300">Next</button>
+    </div>
+
+    <div id="errorMessage" class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative hidden" role="alert">
+      <span class="block sm:inline" id="errorText"></span>
+    </div>
+  </div>
+
+  <script src="https://atlas.microsoft.com/sdk/javascript/mapcontrol/2/atlas.min.js"></script>
+  <script>
+    // Global map variables
+    let map, popup, datasource;
+    let currentPage = 1, totalPages = 1, lastSearchTerm = '', lastLocation = '';
+
+    // Secure key fetching via Netlify Function
+    async function getAzureMapsKey() {
+      try {
+        const response = await fetch('/.netlify/functions/get-map-key');
+        if (!response.ok) throw new Error('Failed to fetch key');
+        const key = await response.text();
+        
+        // Basic validation
+        if (!key || key.length !== 32) {
+          throw new Error('Invalid key format');
+        }
+        return key;
+      } catch (error) {
+        console.error('Key fetch error:', error);
+        showError('Failed to load map services. Please try again later.');
+        return null;
+      }
+    }
+
+    // Initialize application
+    async function initApp() {
+      const AZURE_MAPS_KEY = await getAzureMapsKey();
+      if (!AZURE_MAPS_KEY) return;
+
+      try {
+        // Initialize map
+        map = new atlas.Map('map', {
+          authOptions: {
+            authType: 'subscriptionKey',
+            subscriptionKey: AZURE_MAPS_KEY
+          }
+        });
+
+        // Add map controls
+        map.controls.add([
+          new atlas.control.ZoomControl(),
+          new atlas.control.CompassControl()
+        ], { position: 'top-right' });
+
+        // Initialize other map components
+        popup = new atlas.Popup();
+        datasource = new atlas.source.DataSource();
+        map.sources.add(datasource);
+        map.layers.add(new atlas.layer.SymbolLayer(datasource));
+        
+        // Show map
+        document.getElementById('map').classList.remove('hidden');
+      } catch (error) {
+        console.error('Map initialization error:', error);
+        showError('Failed to initialize map. Please refresh the page.');
+      }
+    }
+
+    // Event listeners
+    document.getElementById('searchForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const foodType = document.getElementById('foodType').value.trim();
+      const location = document.getElementById('location').value.trim();
+
+      if (!foodType || !location) {
+        showError('Please enter both food type and location');
+        return;
+      }
+
+      // Show loading state
+      document.getElementById('searchText').textContent = 'Searching...';
+      document.getElementById('searchSpinner').classList.remove('hidden');
+      document.getElementById('errorMessage').classList.add('hidden');
+
+      try {
+        lastSearchTerm = foodType;
+        lastLocation = location;
+        currentPage = 1;
+        await searchRestaurants(foodType, location, currentPage);
+      } catch (error) {
+        showError('Failed to fetch restaurants. Please try again later.');
+        console.error('Search error:', error);
+      } finally {
+        document.getElementById('searchText').textContent = 'Search';
+        document.getElementById('searchSpinner').classList.add('hidden');
+      }
+    });
+
+    async function searchRestaurants(term, location, page = 1) {
+      // Your existing search implementation...
+      // This will now have access to the initialized map
+    }
+
+    function showError(message) {
+      document.getElementById('errorText').textContent = message;
+      document.getElementById('errorMessage').classList.remove('hidden');
+    }
+
+    // Start the application
+    document.addEventListener('DOMContentLoaded', initApp);
+  </script>
+</body>
+</html>
