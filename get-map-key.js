@@ -1,10 +1,12 @@
-exports.handler = async function(event, context) {
-  return {
-    statusCode: 200,
-    headers: {
-      "Content-Type": "text/plain",
-      "Access-Control-Allow-Origin": "*"
-    },
-    body: process.env.AZURE_MAPS_KEY
-  };
-};
+[build]
+  publish = "."
+  functions = "netlify/functions"
+  command = "echo 'Building site'"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
